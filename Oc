@@ -1,0 +1,1706 @@
+'
+' LUTリソースを読み込んでシート上に表示
+'
+' 参照：JFK 4.1 Resource File Spec
+'   文書番号：GSP-3873
+'    Rev.AO
+'    通知番号：UE-58932
+'
+'
+
+Option Explicit     ' 定義していない変数を使えなくする
+
+
+
+' ----------------------------------------------------------------------
+' モジュール内で用いる定数・大域変数
+'
+' ----------------------------------------------------------------------
+' エラーメッセージを表示するときのタイトル
+Const c_strToolName As String = "LUTリソースツール"
+
+' 処理終了時のメッセージ
+Const c_strReadOK As String = "読み込み完了"        ' 正常終了
+Const c_strWriteOK As String = "書き込み完了"        ' 正常終了
+Const c_strClearOK As String = "消去完了"               ' 正常終了
+
+'
+' ファイル形式チェック用
+Const c_MagicNumber As String = "EP"
+Const c_ResourceType_LUT As String = "5"
+Const c_ResourceVersion_LUT As String = "5100"
+
+'
+' シート上からデータを取得する位置
+Const c_X_Param As Long = 4         ' D列
+Const c_Y_Param_InputFile As Long = 2
+Const c_Y_Param_OutputFile As Long = 3
+Const c_Y_Param_StartY As Long = 4
+Const c_Y_Param_FileX As Long = 5
+Const c_Y_Param_Dataname As Long = 6
+Const c_Y_Param_Datakind As Long = 7
+Const c_Y_Param_Datavalue As Long = 8
+
+'
+' シート上から取得したデータを読み込む位置/書き込む位置
+Dim g_Y_InputFile As Long        ' 入力ファイルY位置
+Dim g_Y_OutputFile As Long      ' 出力ファイルY位置
+Dim g_Y_Start As Long                ' 書き込み開始行
+Dim g_X_Filename As Long            ' ファイル名Y位置
+Dim g_X_DataName As Long      ' データ名(列)
+Dim g_X_DataKind As Long         ' データ種別(列)
+Dim g_X_DataValueStart As Long     ' 値(列)
+
+Const c_Th_NoneDataCount As Long = 10    ' 連続してデータがないときに書き込みを終了
+
+
+' データ型文字列
+Const c_DataKindBYTE As String = "BYTE"
+Const c_DataKindWORD As String = "WORD"
+Const c_DataKindLONG As String = "LONG"
+Const c_DataKindSTRING As String = "STRING"
+
+' データ種類文字列
+Const c_DataName_Header As String = "Header:"
+Const c_DataName_Taglist As String = "Taglst:"
+Const c_DataName_Tag As String = "Tag:"
+
+'
+' シート上書き込む/消す範囲
+Const c_MaxLine As Long = 65536
+Const c_MaxColumn As Long = 1024
+
+'
+' シート上に書き込む位置/読み込む位置の管理
+Dim g_SheetName As String       ' 表示するシート名
+Dim g_Line As Long                     ' 次に書き込む行位置
+
+' ----------------------------------------------------------------------
+'
+' マクロ呼び出しエントリー
+'
+' ----------------------------------------------------------------------
+
+' リソースファイルの読み込み
+Sub ReadLUTResource()
+    ' 読み込む位置/書き込む位置の取得
+    GetPositionParameters
+
+    ' シート名の取得
+    Dim SheetName As String
+    SheetName = ActiveSheet.Name
+
+    ' ファイル名の取得（ファイル選択ダイアログを使用）
+    Dim FilePath As String
+    FilePath = GetFilenameFullpath() ' 引数は不要
+
+    ' ファイルが選択されなかった場合の処理
+    If FilePath = "" Then
+        MsgBox "ファイルが選択されていません。", vbExclamation
+        Exit Sub
+    End If
+
+    ' ファイル名のみを抽出
+    Dim FileName As String
+    FileName = Dir(FilePath) ' フルパスからファイル名だけを取得
+
+    ' 表示のクリア
+    ClearDataInCurrentSheet
+    
+    ' 選択されたファイル名をC12セルに記入
+    Range("C12").value = FileName
+    
+    ' リソースの読み込み
+    Dim bRead As Boolean
+    bRead = ReadLUTResourceSheet(FilePath, SheetName)
+    If bRead Then
+        MsgBox c_strReadOK, vbOKOnly, c_strToolName           ' 読み込み完了メッセージ
+    End If
+End Sub
+
+
+
+
+' 読み込んだデータを消す
+Sub ClearLUTResource()
+
+       
+    ' 読み込む位置/書き込む位置の取得
+    GetPositionParameters
+    
+    '
+    ' 表示のクリア
+    ClearDataInCurrentSheet
+
+    
+    MsgBox c_strClearOK, vbOKOnly, c_strToolName           ' 消去完了メッセージ
+End Sub
+
+' リソースファイルの出力
+Sub WriteLUTResource()
+    ' 読み込む位置/書き込む位置の取得
+    GetPositionParameters
+
+    ' シート「LUTグリッド設定」からK58:K4970のデータをコピーし、
+    ' シート「LUT入出力 (Oc版)」のO88に値を貼り付け
+    Dim srcSheet As Worksheet
+    Dim destSheet As Worksheet
+
+    ' コピー元シート
+    Set srcSheet = ThisWorkbook.Sheets("LUTグリッド設定")
+    ' 貼り付け先シート
+    Set destSheet = ThisWorkbook.Sheets("LUT入出力 (Oc版)")
+
+    ' コピー元の範囲をコピー
+    srcSheet.Range("K58:K4970").Copy
+
+    ' 貼り付け先に値を貼り付け
+    destSheet.Range("O88").PasteSpecial Paste:=xlPasteValues
+
+    ' コピーしたデータをクリア
+    Application.CutCopyMode = False
+
+    ' シート名の取得
+    Dim SheetName As String
+    SheetName = ActiveSheet.Name
+
+    ' ファイル名の取得（ファイル選択ダイアログを使用）
+    Dim FilePath As String
+    FilePath = GetFilenameFullpath() ' 引数は不要
+
+    ' ファイルが選択されなかった場合の処理
+    If FilePath = "" Then
+        MsgBox "ファイルが選択されていません。", vbExclamation
+        Exit Sub
+    End If
+
+    ' ファイル名のみを抽出
+    Dim FileName As String
+    FileName = Dir(FilePath) ' フルパスからファイル名だけを取得
+
+    ' 選択されたファイル名をC13セルに記入
+    Range("C13").value = FileName
+
+    ' リソースの出力
+    Dim bWrite As Boolean
+    bWrite = WriteLUTResourceSheet(FilePath, SheetName)
+    If bWrite Then
+        MsgBox c_strWriteOK, vbOKOnly, c_strToolName           ' 書き込み完了メッセージ
+    End If
+
+End Sub
+
+Sub 入力ボックスからパラメーター設定()
+
+    Dim valC5 As Variant
+    Dim valC8 As Variant
+    Dim valC9 As Variant
+    
+    ' シート「パラメーター設定」を参照
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("パラメーター設定")
+    
+    ' C5セル (最暗LLK(%))
+    valC5 = InputBox("最暗LLK(%)を入力してください。", "最暗LLK(%)")
+    If valC5 <> "" Then
+        ws.Range("C5").value = valC5 / 100
+    End If
+
+    ' C8セル (Double γ@0)
+    valC8 = InputBox("Double γ@0を入力してください。", "Double γ@0", 300)
+    If valC8 <> "" Then
+        ws.Range("C8").value = valC8
+    End If
+    
+    ' C9セル (Double γ@255)
+    valC9 = InputBox("Double γ@0を入力してください。", "Double γ@255", 100)
+    If valC9 <> "" Then
+        ws.Range("C9").value = valC9
+    End If
+
+End Sub
+
+' リソースファイルの読み込みと書き込み処理を統合
+Sub ReadAndWriteLUTResource()
+    On Error GoTo Cleanup ' エラーが発生した場合、処理を中断しクリーンアップする
+    
+    Call 入力ボックスからパラメーター設定
+    
+    ' 処理速度向上のための設定
+    With Application
+        .ScreenUpdating = False  ' 画面更新を停止
+        .Calculation = xlCalculationManual  ' 自動計算を停止
+        .EnableEvents = False  ' イベントを停止
+    End With
+
+    ' 読み込む位置/書き込む位置の取得
+    GetPositionParameters
+
+    ' シート名の取得
+    Dim SheetName As String
+    SheetName = ActiveSheet.Name
+
+    ' ファイル名の取得（ファイル選択ダイアログを使用）
+    Dim FilePath As String
+    FilePath = GetFilenameFullpath()
+
+    ' ファイルが選択されなかった場合の処理
+    If FilePath = "" Then
+        MsgBox "ファイルが選択されていません。", vbExclamation
+        GoTo Cleanup
+    End If
+    
+    ' 表示のクリア
+    ClearDataInCurrentSheet
+
+    ' ファイル名のみを抽出してC12、C13セルに記入
+    Dim FileName As String
+    FileName = Dir(FilePath)
+    Range("C12:C13").value = FileName
+
+
+
+    ' リソースの読み込み
+    If Not ReadLUTResourceSheet(FilePath, SheetName) Then
+        MsgBox "リソースの読み込みに失敗しました。", vbExclamation
+        GoTo Cleanup
+    End If
+
+    ' バックアップファイルの作成
+    Dim BackupFilePath As String
+    BackupFilePath = Left(FilePath, InStrRev(FilePath, ".") - 1) & "_OcBef" & Mid(FilePath, InStrRev(FilePath, "."))
+    
+    If Dir(BackupFilePath) <> "" Then
+        If MsgBox("バックアップファイルは既に存在します。上書きしますか？", vbYesNo + vbQuestion) = vbNo Then
+            MsgBox "処理を中断しました。", vbExclamation
+            GoTo Cleanup
+        End If
+    End If
+
+    ' バックアップファイルを作成し、C14セルに記入
+    FileCopy FilePath, BackupFilePath
+    Range("C14").value = Dir(BackupFilePath)
+
+    ' コピー元シートの設定
+    Dim srcSheet1 As Worksheet, srcSheet2 As Worksheet, destSheet As Worksheet
+    Set srcSheet1 = ThisWorkbook.Sheets("LUTグリッド設定")
+    Set srcSheet2 = ThisWorkbook.Sheets("egray")
+    Set destSheet = ThisWorkbook.Sheets("LUT入出力 (Oc版)")
+
+    ' 「** Unknown Ink code **」の検索
+    Dim unknownInkCell As Range
+    Set unknownInkCell = destSheet.Cells.Find(What:="** Unknown Ink code **", LookIn:=xlValues, LookAt:=xlWhole)
+
+    ' 「** Unknown Ink code **」が見つかった場合のみ処理
+    If Not unknownInkCell Is Nothing Then
+        ' K58:K4970のデータをコピーし、5セル下に貼り付け
+        srcSheet1.Range("K58:K4970").Copy
+        unknownInkCell.Offset(5, 0).PasteSpecial Paste:=xlPasteValues
+
+        ' K58:K89のデータをコピーし、4932セル下に貼り付け
+        srcSheet2.Range("K58:K89").Copy
+        unknownInkCell.Offset(4932, 0).PasteSpecial Paste:=xlPasteValues
+    Else
+        MsgBox "「** Unknown Ink code **」が見つかりませんでした。", vbExclamation
+    End If
+
+    ' コピーしたデータをクリア
+    Application.CutCopyMode = False
+
+    Range("B11").Select
+
+    ' リソースの出力
+    If WriteLUTResourceSheet(FilePath, SheetName) Then
+        MsgBox c_strWriteOK, vbOKOnly, c_strToolName ' 書き込み完了メッセージ
+    End If
+
+Cleanup:
+    ' 処理終了時に必ず元に戻す
+    With Application
+        .ScreenUpdating = True
+        .Calculation = xlCalculationAutomatic
+        .EnableEvents = True
+    End With
+End Sub
+
+
+
+
+
+
+
+' ----------------------------------------------------------------------
+'
+' 以下は Privateのみ
+' 外部からの呼び出しをしない手続き・関数
+'
+' ----------------------------------------------------------------------
+
+'
+' シート上のパラメーターを取得
+' 参照するセル位置を決める
+Private Sub GetPositionParameters()
+    g_Y_InputFile = Cells(c_Y_Param_InputFile, c_X_Param)               ' 入力ファイル名 行位置
+    g_Y_OutputFile = Cells(c_Y_Param_OutputFile, c_X_Param)         ' 出力ファイル名 行位置
+    g_Y_Start = Cells(c_Y_Param_StartY, c_X_Param)                          ' データ表示/出力 開始行
+    g_X_Filename = Cells(c_Y_Param_FileX, c_X_Param)                     ' ファイル名(入力,出力共通) 列位置
+    g_X_DataName = Cells(c_Y_Param_Dataname, c_X_Param)         ' データ名 列位置
+    g_X_DataKind = Cells(c_Y_Param_Datakind, c_X_Param)              ' データ種別 列位置
+    g_X_DataValueStart = Cells(c_Y_Param_Datavalue, c_X_Param)  ' データ 開始列位置
+End Sub
+
+' シート上のセルに表示されているデータを消す
+Private Sub ClearDataInCurrentSheet()
+    '
+    ' 表示のクリア
+    Range(Cells(g_Y_Start, g_X_DataName), Cells(g_Y_Start + c_MaxLine - 1, g_X_DataName + c_MaxColumn - 1)).value = ""
+
+    ' C12, C13, C14セルもクリア
+    Range("C12:C14").value = ""
+End Sub
+
+
+' ファイル選択ダイアログからファイル名/パスを取得
+Private Function GetFilenameFullpath() As String
+   Dim FilePath As String
+   Dim FileDialog As FileDialog
+   Set FileDialog = Application.FileDialog(msoFileDialogOpen)
+   
+   ' ファイルダイアログの設定
+   With FileDialog
+       .Title = "ファイルを選択してください"
+       .AllowMultiSelect = False ' 複数ファイル選択を許可しない
+       .Filters.Clear ' フィルターのリセット
+       .Filters.Add "リソースファイル", "*.bin", 1 ' リソースファイルのみ表示
+
+       ' ファイルが選択された場合
+       If .Show = -1 Then
+           FilePath = .SelectedItems(1) ' 選択されたファイルパスを取得
+       Else
+           FilePath = "" ' キャンセルされた場合は空文字
+       End If
+   End With
+
+   GetFilenameFullpath = FilePath
+End Function
+
+
+
+'
+' LUTリソースの読み込み
+'
+Private Function ReadLUTResourceSheet(FilePath As String, SheetName As String) As Boolean
+
+    Dim FileExist As String
+    Dim errflg As Boolean
+    Dim msg As String
+
+    ' 読み込み中の再計算による速度低下を防ぐため、自動計算と再描画を停止
+    Application.Calculation = xlCalculationManual
+    Application.ScreenUpdating = False
+    msg = "Error."
+    On Error GoTo error_end
+
+    errflg = False
+
+    ' 入力ファイルの確認
+    FileExist = Dir(FilePath)
+
+    If FileExist = "" Then
+        msg = "File does not exist. : " & FilePath
+        GoTo error_end
+    End If
+
+    Open FilePath For Binary Access Read As #1     'ファイルのオープン
+
+    ' 出力シート
+    g_SheetName = SheetName
+    g_Line = g_Y_Start
+
+    
+    Dim bHeader As Boolean
+    bHeader = ReadLUTHeader()                           ' ヘッダ部を読み込んで確認する
+    If Not bHeader Then
+        ' ヘッダフォーマットが想定したものになっていないときはエラーとする
+        msg = "File format error. : " & FilePath
+        Close #1
+        GoTo error_end
+    End If
+    
+    ' タグとタグのアドレスを読み込む
+    Dim bTags As Boolean
+    Dim TagCount As Long                                    ' タグの数
+    Dim TagName() As String                                 ' タグ名
+    Dim TagOffset() As Long                                     ' タグのアドレス
+    bTags = ReadLUTTags(TagCount, TagName, TagOffset)
+    If Not bTags Then
+        msg = "File Read error in reading Tags.: " & FilePath
+        Close #1
+        GoTo error_end
+    End If
+    
+    'タグ本体を読み込む
+    Dim i As Long
+    For i = 0 To TagCount - 1
+        Dim bTag As Boolean
+        bTag = ReadLUTTag(TagName(i), TagOffset(i))
+        If Not bTag Then
+            msg = "File Read error in reading Tag.: " & TagName(i)
+            Close #1
+            GoTo error_end
+        End If
+    Next i
+    
+
+    Close #1    ' ファイルを閉じる
+    ReadLUTResourceSheet = True
+    GoTo normal_end
+
+
+error_end:
+    Close #1    ' ファイルを閉じる
+    MsgBox msg, vbOKOnly, c_strToolName           'エラーメッセージの表示
+    ReadLUTResourceSheet = False                    '読み込み失敗
+
+normal_end:
+    '自動計算と再描画を再開
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+End Function
+
+'
+' ヘッダ部を読み込んでチェックする
+Private Function ReadLUTHeader() As Boolean
+    ' ヘッダ部読み込み用の Byte配列
+    Dim MagicNumber(2 - 1) As Byte
+    Dim Reserved1(12 - 1) As Byte
+    Dim Reserved2(0) As Byte
+    Dim ResourceType(0) As Byte
+    Dim ResourceVersion(4 - 1) As Byte
+    Get #1, , MagicNumber
+    Get #1, , Reserved1
+    Get #1, , Reserved2
+    Get #1, , ResourceType
+    Get #1, , ResourceVersion
+    
+    Dim strMagicNumber As String
+    Dim strResourceType As String
+    Dim strResourceVersion As String
+    strMagicNumber = BytesToString(MagicNumber)
+    strResourceType = BytesToString(ResourceType)
+    strResourceVersion = BytesToString(ResourceVersion)
+    
+    WriteName c_DataName_Header                     ' Header:
+    WriteData "Magic Number", strMagicNumber, ""
+    WriteData "Reserved", Reserved1, ""
+    WriteData "Reserved", Reserved2, ""
+    WriteData "Resource Type", strResourceType, ""
+    WriteData "Resource Version", strResourceVersion, ""
+    NewLine
+    
+    '
+    ' ヘッダ内の文字列が想定したとおりになっているかチェック
+    '
+    If strMagicNumber = c_MagicNumber And strResourceType = c_ResourceType_LUT And strResourceVersion = c_ResourceVersion_LUT Then
+        ' ヘッダ部OK
+        ReadLUTHeader = True
+    Else
+        ' ヘッダ部NG
+        ReadLUTHeader = False
+    End If
+End Function
+
+'
+' タグ配列を読み込む
+Private Function ReadLUTTags(TagCount As Long, TagName() As String, TagOffset() As Long) As Boolean
+    On Error GoTo err
+    WriteName c_DataName_Taglist
+    
+    Get #1, , TagCount          ' タグの数
+    ReDim TagName(TagCount - 1)
+    ReDim TagOffset(TagCount - 1)
+    WriteData "Tag count", TagCount, ""
+    
+    Dim i As Long
+    Dim b(4 - 1) As Byte
+    For i = 0 To TagCount - 1
+        Get #1, , b
+        TagName(i) = BytesToString(b)
+        Get #1, , TagOffset(i)
+        WriteData "Tagname(" & i & ")", TagName(i), ""
+        WriteData "Offset(" & i & ")", TagOffset(i), ""
+    Next i
+    NewLine
+    
+    ReadLUTTags = True
+    Exit Function
+err:
+    ' 読み込み失敗
+    ReadLUTTags = False
+End Function
+
+'
+' タグを読み込む
+Private Function ReadLUTTag(TagName As String, Offset As Long) As Boolean
+    ' タグ名記述部分を読み込んで表示する箇所は共通
+    Dim b(4 - 1) As Byte
+    Dim tag As String
+    Dim TagDescription As String
+    Get #1, Offset + 1, b
+    tag = BytesToString(b)
+    TagDescription = GetTagDescription(tag)
+    WriteData c_DataName_Tag, tag, TagDescription
+    
+    ' タグの中身を読み込む
+    ' タグの種類ごとに分岐
+    Select Case TagName
+        Case "rstp"             ' Resource Type
+            ReadResourceType
+        
+        Case "modl"           ' Model Code
+            ReadModel
+        
+        Case "mdia"             ' Media ID
+            ReadMedia
+        
+        Case "reso"             ' Resolution
+            ReadResolution
+    
+        Case "inkd"             ' Ink duty
+            ReadInkDuty
+            
+        Case "cdbg"             ' Double Gamma Color
+            ReadDoubleGamma
+        
+        Case "mdbg"             ' Double Gamma Mono
+            ReadDoubleGamma
+        
+        Case "gama"             ' Target Gamma
+            ReadGamma
+        
+        Case "cspc"             ' Target ColorSpace
+                                        ' →廃止されている
+        
+        Case "csin"             ' ColorSpace inverse
+                                       ' →廃止されている
+        
+        Case "clut"             ' Color Lookup Table
+            ReadCLUT
+        
+        Case "mlut"             ' Monochrome Table
+            ReadMLUT
+        
+        Case "cgry"             ' Color Gray Table
+            ReadMLUT
+            
+        
+        Case "gmcn"             ' Gamma Conversion Table
+            ReadGammaConversion
+        
+        Case "hucn"             ' Hue control
+            ReadHue
+        
+        Case "chcn"             ' Chroma control
+            ReadChroma
+        
+        Case "dncn"             ' Dencity control
+            ReadDensity
+        
+        Case "egry"             ' 16bit(Enhanced) Gray LUT
+            ReadMLUTegry
+        
+        Case "abwp"             ' Advanced Black and White Photo LUT
+            ReadMLUTabwp
+        
+        Case "ctcn"                ' Color tone control parameter
+            ReadColorToneControl
+        
+        Case "encd"               ' Encode/Decode Tag
+            ReadEncodeDecode
+        
+        Case "spkt"                 'Separate K Table
+            ReadSeparateK
+        
+        Case Else
+            WriteData "***Unkown Tag***", TagName, ""
+    End Select
+    
+    NewLine     ' 改行しておく
+    
+    ReadLUTTag = True
+End Function
+
+Private Function GetTagDescription(tag As String) As String
+    Dim s As String
+    Select Case tag
+    Case "rstp":        s = "Resource Type"           ' Resource Type
+    Case "modl":        s = "Model Code"         ' Model Code
+    Case "mdia":        s = "Media ID"             ' Media ID
+    Case "reso":        s = "Resolution"           ' Resolution
+    Case "inkd":        s = "Ink duty"           ' Ink duty
+    Case "cdbg":        s = "Double Gamma Color"           ' Double Gamma Color
+    Case "mdbg":        s = "Double Gamma Mono"           ' Double Gamma Mono
+    Case "gama":        s = "Target Gamma"            ' Target Gamma
+    Case "cspc":        s = "Target ColorSpace  (Obolete)"           ' Target ColorSpace
+    Case "csin":        s = "ColorSpace inverse (Obolete)"             ' ColorSpace inverse
+    Case "clut":        s = "Color Lookup Table"             ' Color Lookup Table
+    Case "mlut":        s = "Monochrome Table"             ' Monochrome Table
+    Case "cgry":        s = "Color Gray Table"             ' Color Gray Table
+    Case "gmcn":        s = "Gamma Conversion Table"             ' Gamma Conversion Table
+    Case "hucn":        s = "Hue control"             ' Hue control
+    Case "chcn":        s = "Chroma control"             ' Chroma control
+    Case "dncn":        s = "Dencity control"             ' Dencity control
+    Case "egry":        s = "16bit(Enhanced) Gray LUT"             ' 16bit(Enhanced) Gray LUT
+    Case "abwp":        s = "Advanced Black and White Photo LUT"             ' Advanced Black and White Photo LUT
+    Case "ctcn":        s = "Color tone control parameter"                ' Color tone control parameter
+    Case "encd":        s = "Encode/Decode Tag"               ' Encode/Decode Tag
+    Case "spkt":        s = "Separate K Table"                 'Separate K Table
+    Case Else
+        s = "** ??? **"
+    End Select
+    GetTagDescription = s
+End Function
+
+'
+' タグの本体を読み込む
+'  ReadLUTTag() 内でタグ名部分は読み込んであるので、それ以降を読み込めばよい
+'
+'
+
+' "rstp" ResourceType
+Private Sub ReadResourceType()
+    Dim ResourceType As Byte
+    Dim ResourceTypeName As String
+    Get #1, , ResourceType
+    ResourceTypeName = GetResourceTypeName(ResourceType)
+    WriteData "ResourceType", ResourceType, ResourceTypeName
+    
+End Sub
+
+' リソースタイプ名の取得
+'1: Photo
+'2: Base
+'3: E -Photo
+'4: eRGB
+'5: Customise
+'6:E-Photo conversion
+'7: Matrix
+'8: ABWP
+'9: Copy
+'128: CMYK LUT
+Private Function GetResourceTypeName(ResourceType As Byte) As String
+    Dim s As String
+    Select Case ResourceType
+    Case 1:     s = "Photo"
+    Case 2:     s = "Base"
+    Case 3:     s = "E-Photo"
+    Case 4:     s = "eRGB"
+    Case 5:     s = "Customise"
+    Case 6:     s = "E-Photo conversion"
+    Case 7:     s = "Matrix"
+    Case 8:     s = "ABWP"
+    Case 9:     s = "Copy"
+    Case 128: s = "CMYK LUT"
+    Case Else
+        s = "** Unknown Resource Type **"
+    End Select
+    GetResourceTypeName = s
+End Function
+
+' "modl" Model Code
+Private Sub ReadModel()
+    Dim ModelCode As Long
+    Get #1, , ModelCode
+    WriteData "Model ID(=ICC Configuration Code)", ModelCode, ""
+End Sub
+
+' "mdia" Media ID
+Private Sub ReadMedia()
+    Dim MediaID As Integer
+    Get #1, , MediaID
+    WriteData "Media ID", MediaID, ""
+End Sub
+
+' "reso" Resolution
+Private Sub ReadResolution()
+    Dim ResX As Integer
+    Dim ResY As Integer
+    Get #1, , ResX
+    Get #1, , ResY
+    WriteData "Horizontal resolution [dpi]", ResX, ""
+    WriteData "Vertical resolution [dpi]", ResY, ""
+End Sub
+
+
+' "inkd" Ink Duty
+'    Resource Version 5100 以降のみに対応
+Private Sub ReadInkDuty()
+    Dim OutputType As Byte
+    Dim InkDutyChannels As Byte
+    Get #1, , OutputType
+    Get #1, , InkDutyChannels
+    WriteData "OutputType", OutputType, ""
+    WriteData "InkDutyChannels", InkDutyChannels, ""
+    
+    ReadInkDutyCodes "InkDutyCode", CLng(InkDutyChannels)                 ' インクコード列読み込み
+    Dim InkDuty() As Integer
+    ReDim InkDuty(InkDutyChannels - 1)
+    Get #1, , InkDuty
+    WriteData "InkDuty", InkDuty, ""
+    
+End Sub
+
+' "cdbg" Double Gamma Color
+' "mdbg" Double Gamma Mono
+'   データ構造が同じなので同じプロシージャーで対応する
+Private Sub ReadDoubleGamma()
+    Dim DblGamma0 As Integer
+    Dim DblGamma255 As Integer
+    Get #1, , DblGamma0
+    Get #1, , DblGamma255
+    WriteData "Double gamma value at 0", DblGamma0, ""
+    WriteData "Double gamma value at 255", DblGamma255, ""
+End Sub
+
+' "gama" Target Gamma
+Private Sub ReadGamma()
+    Dim Gamma As Integer
+    Get #1, , Gamma
+    WriteData "Target Gamma", Gamma, ""
+End Sub
+
+' "clut" Color Lookup Table
+
+'Offset address Size
+'0      4 ‘clut’
+'4      1 3: input dimension
+'5      1 Unit Size: output dimension
+'6      1 Output Type（詳細はOutput Type を参照）
+'7      1 Nr: R grid no
+'8      1 Ng: G grid no
+'9      1 Nb: B grid no
+'10 Unit Size Ink Color position
+'                   Set ink code in each position
+'                   Set 0xff in not use position
+'                   Ink code is described in Ink Code.
+'10+UnitSize               Nr R grid position
+'10+UnitSize +Nr        Ng G grid position
+'10+UnitSize+Nr+Ng  Nb B grid position
+'10+UnitSize+Nr+Ng+Nb Nr*Ng*Nb*Unit Size
+'                                   Color translation LUT(Color Translation LUT 参照)
+Private Sub ReadCLUT()
+    Dim InputDimension As Byte
+    Dim UnitSize As Byte                ' Unit Size: output dimension
+    Dim OutputType As Byte
+    ReadLUTCommon InputDimension, UnitSize, OutputType               ' LUT共通
+
+    Select Case InputDimension
+        Case 3              ' RGB
+            ReadClutRGB CLng(UnitSize)
+        Case 4              ' CMYK
+            ReadClutCMYK CLng(UnitSize)
+        Case Else
+            WriteData "** Unkown input dimension **", InputDimension, ""
+    End Select
+    
+    
+    
+End Sub
+
+' "mlut" / "cgry"
+Private Sub ReadMLUT()
+    Dim InputDimension As Byte
+    Dim UnitSize As Byte                ' Unit Size: output dimension
+    Dim OutputType As Byte
+    ReadLUTCommon InputDimension, UnitSize, OutputType                 ' LUT共通
+
+    If InputDimension = 1 Then
+        ReadMonoLutBody CLng(UnitSize)
+    Else
+        WriteData "** Unkown input dimension **", InputDimension, ""
+    End If
+End Sub
+
+' LUT 16bitモノクロ
+' "egry"
+Private Sub ReadMLUTegry()
+    Dim InputDimension As Byte
+    Dim UnitSize As Byte                ' Unit Size: output dimension
+    Dim OutputType As Byte
+    ReadLUTCommon InputDimension, UnitSize, OutputType                   ' LUT共通
+    
+    ' エラーチェック Input dimension は1のみ
+    If InputDimension <> 1 Then
+        WriteData "** Unknown input dimension **", InputDimension, ""
+        Exit Sub
+    End If
+    
+    Dim N As Byte
+    Get #1, , N
+    WriteData "Grid no", N, ""
+    
+    ReadMLUTBody CLng(N), CLng(UnitSize) ' 16bit モノクロLUT 共通
+End Sub
+
+' LUT 16bitモノクロ
+' "abwp"
+' "egry"　との違いはグリッド数のサイズのみ
+Private Sub ReadMLUTabwp()
+    Dim InputDimension As Byte
+    Dim UnitSize As Byte                ' Unit Size: output dimension
+    Dim OutputType As Byte
+    ReadLUTCommon InputDimension, UnitSize, OutputType                ' LUT共通
+    
+    ' エラーチェック Input dimension は1のみ
+    If InputDimension <> 1 Then
+        WriteData "** Unknown input dimension **", InputDimension, ""
+        Exit Sub
+    End If
+    
+    Dim N As Integer
+    Get #1, , N
+    WriteData "Grid no", N, ""
+    
+    ReadMLUTBody CLng(N), CLng(UnitSize) ' 16bit モノクロLUT 共通
+End Sub
+
+
+
+' LUT 16bit モノクロ 共通 "egry" "abwp"
+Private Sub ReadMLUTBody(N As Long, UnitSize As Long)
+    ' Gamma
+    Dim Gamma As Integer
+    Get #1, , Gamma
+    WriteData "Gamma(x100)", Gamma, ""
+    
+    Dim UseBitNumber As Byte
+    Dim MaxValueInLut As Byte
+    Dim Reserved(2 - 1) As Byte
+    Get #1, , UseBitNumber
+    Get #1, , MaxValueInLut
+    Get #1, , Reserved
+    WriteData "Use bit number", UseBitNumber, ""
+    WriteData "Max value in LUT", MaxValueInLut, ""
+    WriteData "reserved", Reserved, ""
+    
+    ' Ink color positon
+    ReadInkColorPosition UnitSize
+    
+    ' Grid postion
+    ReadGridPosition "Grid postion", N
+
+'    Dim LUTSize As Long
+'    LUTSize = CLng(N) * UnitSize
+'    Dim LUT() As Integer    '田中(健)　Integer→Long
+'    ReDim LUT(LUTSize - 1)
+'    Get #1, , LUT
+'    WriteDataLUTI "Lookup Table", LUT, UnitSize
+'
+    Dim LUTDataNum As Long, LUTDataSize As Long
+    LUTDataNum = CLng(N) * UnitSize         'LUTデータ数
+    LUTDataSize = LUTDataNum * 2            'LUTデータサイズ＝LUTデータ数×２byte(shortのため)
+
+    Dim LUTBin() As Byte, LUT() As Long
+    ReDim LUTBin(LUTDataSize - 1)
+    ReDim LUT(LUTDataNum - 1)
+    Get #1, , LUTBin
+
+    Dim i As Long
+    For i = 0 To UBound(LUT)
+        LUT(i) = CLng(LUTBin(i * 2 + 1)) * 256 + CLng(LUTBin(i * 2))
+    Next i
+
+    WriteDataLUTI "Lookup Table", LUT, UnitSize
+
+End Sub
+
+'
+' LUTのヘッダー部共通
+'
+Private Sub ReadLUTCommon(InputDimension As Byte, UnitSize As Byte, OutputType As Byte)
+    Get #1, , InputDimension
+    Get #1, , UnitSize
+    Get #1, , OutputType
+    WriteData "Input dimension", InputDimension, ""
+    WriteData "Unit size: output dimension", UnitSize, ""
+    WriteData "Opuput Type", OutputType, ""
+    
+End Sub
+
+'
+' RGB LUT
+'
+Private Sub ReadClutRGB(UnitSize As Long)
+    Dim Nr As Byte                      ' Number of R Grid
+    Dim Ng As Byte                      ' Number of G Grid
+    Dim Nb As Byte                      ' Number of B Grid
+    Get #1, , Nr
+    Get #1, , Ng
+    Get #1, , Nb
+    WriteData "Number of R grid", Nr, ""
+    WriteData "Number of G grid", Ng, ""
+    WriteData "Number of B grid", Nb, ""
+    
+    ' インク
+    ReadInkColorPosition UnitSize
+    
+    ' グリッド
+    ReadGridPosition "R Grid position", CLng(Nr)
+    ReadGridPosition "G Grid position", CLng(Ng)
+    ReadGridPosition "B Grid position", CLng(Nb)
+    
+    ' LUT本体
+    Dim LUTSize As Long
+    LUTSize = CLng(Nr) * CLng(Ng) * CLng(Nb) * CLng(UnitSize)
+    Dim CLUT() As Byte
+    ReDim CLUT(LUTSize - 1)
+    Get #1, , CLUT
+    WriteDataLUTB "Color Lookup Table", CLUT, CLng(UnitSize)
+
+End Sub
+
+'
+' CMYK LUT
+'
+Private Sub ReadClutCMYK(UnitSize As Long)
+    Dim Nc As Byte                      ' Number of C Grid
+    Dim Nm As Byte                      ' Number of M Grid
+    Dim Ny As Byte                      ' Number of Y Grid
+    Dim Nk As Byte                      ' Number of K Grid
+    Get #1, , Nc
+    Get #1, , Nm
+    Get #1, , Ny
+    Get #1, , Nk
+    WriteData "Number of C grid", Nc, ""
+    WriteData "Number of M grid", Nm, ""
+    WriteData "Number of Y grid", Ny, ""
+    WriteData "Number of K grid", Nk, ""
+
+    ' インク
+    ReadInkColorPosition UnitSize
+    
+    ' グリッド
+    ReadGridPosition "C Grid position", CLng(Nc)
+    ReadGridPosition "M Grid position", CLng(Nm)
+    ReadGridPosition "Y Grid position", CLng(Ny)
+    ReadGridPosition "K Grid position", CLng(Nk)
+ 
+    ' LUT本体
+    Dim LUTSize As Long
+    LUTSize = CLng(Nc) * CLng(Nm) * CLng(Ny) * CLng(Nk) * CLng(UnitSize)
+    Dim CLUT() As Byte
+    ReDim CLUT(LUTSize - 1)
+    Get #1, , CLUT
+    WriteDataLUTB "Color Lookup Table", CLUT, CLng(UnitSize)
+End Sub
+
+'
+' グリッド位置データの読み込み
+Private Sub ReadGridPosition(Name As String, NGrid As Long)
+    Dim GridPosition() As Byte
+    ReDim GridPosition(NGrid - 1)
+    Get #1, , GridPosition
+    WriteData Name, GridPosition, ""
+End Sub
+
+
+' LUT モノクロ用
+' "mlut" / "cgry"
+Private Sub ReadMonoLutBody(UnitSize As Long)
+    Dim N As Byte
+    Get #1, , N
+    WriteData "Grid no", N, ""
+    ' Ink Color Position （1色しか出力しないときは不要）
+    If UnitSize > 1 Then
+        ReadInkColorPosition UnitSize
+    End If
+    
+    ReadGridPosition "Grid postion", CLng(N)
+    
+    Dim LUTSize As Long
+    LUTSize = CLng(N) * UnitSize
+    Dim LUT() As Byte
+    ReDim LUT(LUTSize - 1)
+    Get #1, , LUT
+    WriteDataLUTB "Lookup Table", LUT, UnitSize
+    
+End Sub
+
+' Ink Color Position
+' LUT共通インクコード列の読み込み
+Private Sub ReadInkColorPosition(UnitSize As Long)
+    ReadInkCodes "Ink Color Position", UnitSize
+End Sub
+
+'
+' インクコードの読み込みと色名表示
+Private Sub ReadInkCodes(Name As String, UnitSize As Long)
+    Dim InkCodes() As Byte
+    ReDim InkCodes(UnitSize - 1)
+    Get #1, , InkCodes
+    WriteData Name, InkCodes, ""
+    
+    ' 色名表示
+    Dim InkColorName() As String
+    ReDim InkColorName(UnitSize - 1)
+    Dim i As Long
+    For i = 0 To UnitSize - 1
+        InkColorName(i) = GetInkName(InkCodes(i))
+    Next i
+    WriteComment ";", InkColorName
+End Sub
+
+'
+' インクデューティーコードの読み込みと色名表示
+Private Sub ReadInkDutyCodes(Name As String, UnitSize As Long)
+    Dim InkCodes() As Byte
+    ReDim InkCodes(UnitSize - 1)
+    Get #1, , InkCodes
+    WriteData Name, InkCodes, ""
+    
+    ' 色名表示
+    Dim InkColorName() As String
+    ReDim InkColorName(UnitSize - 1)
+    Dim i As Long
+    For i = 0 To UnitSize - 1
+        InkColorName(i) = GetInkDutyCodeName(InkCodes(i))
+    Next i
+    WriteComment ";", InkColorName
+End Sub
+
+'
+' "gmcn" Gamma conversion Table
+Private Sub ReadGammaConversion()
+    Dim InputDimension As Byte
+    Dim OutputDimension As Byte
+    Get #1, , InputDimension
+    Get #1, , OutputDimension
+    WriteData "Input dimension", InputDimension, ""
+    WriteData "Output dimension", OutputDimension, ""
+    
+    ' エラーチェック：input dimension, output dimension は 1のみ有効
+    If InputDimension <> 1 Then
+        WriteData "** Unknown Input dimension", InputDimension, ""
+    End If
+    If OutputDimension <> 1 Then
+        WriteData "** Unkown Output dimension", OutputDimension, ""
+    End If
+    If InputDimension <> 1 Or OutputDimension <> 1 Then
+        Exit Sub
+    End If
+    
+    ' テーブルサイズは 256固定
+    Const LUTSize As Long = 256
+    Dim GammaTranslationLUT(LUTSize - 1) As Byte
+    Get #1, , GammaTranslationLUT
+    WriteDataLUTB "Gamma translation LUT", GammaTranslationLUT, 1
+    
+End Sub
+
+' "hucn" Hue control
+Private Sub ReadHue()
+    Dim RedHueShift As Byte
+    Dim GreenHueShift As Byte
+    Dim BlueHueShift As Byte
+    Get #1, , RedHueShift
+    Get #1, , GreenHueShift
+    Get #1, , BlueHueShift
+    WriteData "Red Hue shift rate", RedHueShift, ""
+    WriteData "Green Hue shift rate", GreenHueShift, ""
+    WriteData "Blue Hue shift rate", BlueHueShift, ""
+End Sub
+
+' "chcn" Chroma control
+Private Sub ReadChroma()
+    Dim SaturationEnhancedRate As Byte
+    Get #1, , SaturationEnhancedRate
+    WriteData "Saturation enhanced rate", SaturationEnhancedRate, ""
+End Sub
+
+' "dncn" Density control
+Private Sub ReadDensity()
+    Dim CReduce As Byte
+    Dim MReduce As Byte
+    Dim YReduce As Byte
+    Dim KReduce As Byte
+    Dim RReduce As Byte
+    Dim GReduce As Byte
+    Dim BReduce As Byte
+    WriteData "Cyan reduce rate", CReduce, ""
+    WriteData "Magenta reduce rate", MReduce, ""
+    WriteData "Yellow reduce rate", YReduce, ""
+    WriteData "Black reduce rate", KReduce, ""
+    WriteData "Red reduce rate", RReduce, ""
+    WriteData "Green reduce rate", GReduce, ""
+    WriteData "Blue reduce rate", BReduce, ""
+    
+End Sub
+
+' "ctcn" Color tone control parameter
+Private Sub ReadColorToneControl()
+    Dim UnitSize As Byte
+    Dim OutputType As Byte
+    Dim NumOfColorTonePosition As Byte
+    Dim UnitOfRate As Byte          ' Unit of "Ink increase and decrease rate"
+    Get #1, , UnitSize
+    Get #1, , OutputType
+    Get #1, , NumOfColorTonePosition
+    Get #1, , UnitOfRate
+    WriteData "Unit size", UnitSize, ""
+    WriteData "Output Type", OutputType, ""
+    WriteData "Number of Color tone position", NumOfColorTonePosition, ""
+    WriteData "Unit of  Ink increase and decrease rate", UnitOfRate, ""
+    
+    ' Ink color position
+    ReadInkColorPosition CLng(UnitSize)
+    
+    Dim CMax As Integer
+    Dim CMin As Integer
+    Dim MMax As Integer
+    Dim MMin As Integer
+    Dim YMax As Integer
+    Dim YMin As Integer
+    
+    Get #1, , CMax
+    Get #1, , CMin
+    Get #1, , MMax
+    Get #1, , MMin
+    Get #1, , YMax
+    Get #1, , YMin
+    WriteData "Cyan Max", CMax, ""
+    WriteData "Cyan Min", CMin, ""
+    WriteData "Magenta Max", MMax, ""
+    WriteData "Magenta Min", MMin, ""
+    WriteData "Yelow Max", YMax, ""
+    WriteData "Yellow Min", YMin, ""
+    
+    Dim ColorToneIndex() As Integer
+    Dim ColorToneIndexL() As Long
+    Dim ColorToneIndexCount As Long
+    ColorToneIndexCount = UnitSize * NumOfColorTonePosition
+    ReDim ColorToneIndex(ColorToneIndexCount - 1)
+    ReDim ColorToneIndexL(ColorToneIndexCount - 1)
+    Get #1, , ColorToneIndex
+    
+    Dim i As Long
+    For i = 0 To UBound(ColorToneIndex)
+        ColorToneIndexL(i) = ColorToneIndex(i)
+    Next i
+    
+    WriteDataLUTI "ColorToneIndex", ColorToneIndexL, CLng(UnitSize)
+    
+    Dim InkIncreaseAndDecreaseRate() As Integer
+    Dim InkIncreaseAndDecreaseRateL() As Long
+    Dim InkIncreaseAndDecreaseRateCount As Long
+    InkIncreaseAndDecreaseRateCount = UnitSize * (NumOfColorTonePosition + 2)
+    ReDim InkIncreaseAndDecreaseRate(InkIncreaseAndDecreaseRateCount - 1)
+    ReDim InkIncreaseAndDecreaseRateL(InkIncreaseAndDecreaseRateCount - 1)
+    
+    Get #1, , InkIncreaseAndDecreaseRate
+    
+    For i = 0 To UBound(ColorToneIndex)
+        InkIncreaseAndDecreaseRateL(i) = InkIncreaseAndDecreaseRate(i)
+    Next i
+    WriteDataLUTI "Ink increase and decrease rate", InkIncreaseAndDecreaseRateL, CLng(UnitSize)
+    
+End Sub
+
+' "encd" Encode/Decode Tag
+Private Sub ReadEncodeDecode()
+    Dim ColorLUTEncodeInformation As Byte
+    Dim GrayLUTEncodeInformation As Byte
+    Dim Gray16bitLUTEncodeInformation As Byte
+    Dim MonoLUTEncodeInformation As Byte
+    Dim AbwpLUTEncodeInformation As Byte
+    Dim Reserved(3 - 1) As Byte
+    
+    Get #1, , ColorLUTEncodeInformation
+    Get #1, , GrayLUTEncodeInformation
+    Get #1, , Gray16bitLUTEncodeInformation
+    Get #1, , MonoLUTEncodeInformation
+    Get #1, , AbwpLUTEncodeInformation
+    Get #1, , Reserved
+    
+    WriteData "Color LUT encode information", ColorLUTEncodeInformation, ""
+    WriteData "Gray LUT(for Graph mode gray in Base LUT) encode information", GrayLUTEncodeInformation, ""
+    WriteData "16bit Gray LUT encode information", Gray16bitLUTEncodeInformation, ""
+    WriteData "Mono LUT encode information", MonoLUTEncodeInformation, ""
+    WriteData "Advance Black and White Photo LUT encode information", AbwpLUTEncodeInformation, ""
+    WriteData "Reserved", Reserved, ""
+End Sub
+
+' "spkt" Separate K Table
+Private Sub ReadSeparateK()
+    Dim InputDimension As Byte
+    Dim UnitSize As Byte
+    Dim N As Integer
+    Dim DoubleGamma0 As Integer
+    Dim DoubleGamma255 As Integer
+    
+    Get #1, , InputDimension
+    Get #1, , UnitSize
+    Get #1, , N
+    Get #1, , DoubleGamma0
+    Get #1, , DoubleGamma255
+    WriteData "input dimension", InputDimension, ""
+    WriteData "Unit Size:output dimension", UnitSize, ""
+    WriteData "N:Number of grids", N, ""
+    WriteData "Double gamma 0 value", DoubleGamma0, ""
+    WriteData "Double gamma 255 value", DoubleGamma255, ""
+
+    ' グリッド位置
+    ReadGridPosition "Grid positon", CLng(N)
+    
+    Dim ColorTranslateLUT As Byte
+    ReDim ColorTranslateLUT(N - 1)
+    Get #1, , ColorTranslateLUT
+    WriteData "Color translate LUT", ColorTranslateLUT, ""
+End Sub
+
+'
+' インクデューティーコード→文字列変換
+Private Function GetInkDutyCodeName(InkDutyCode As Byte)
+    Dim s As String
+    Select Case InkDutyCode
+    Case 0:        s = "C_Duty"
+    Case 1:        s = "M_Duty"
+    Case 2:        s = "Y_Duty"
+    Case 3:        s = "K_Duty"
+    Case 4:        s = "Lc_Duty"
+    Case 5:        s = "Lm_Duty"
+    Case 6:        s = "Dy_Duty"
+    Case 7:        s = "Lk_Duty"
+    Case 8:        s = "R_Duty"
+    Case 9:        s = "G_Duty"
+    Case 10:      s = "B_Duty"
+    Case 11:      s = "Lc+Lm_Duty"    ' 古いリソースではLc+Lm_Duty（22）の代わりに格納されている場合がある．新規作成の場合には使用しない．
+    Case 12:      s = "Mono_Duty"
+    Case 13:      s = "Red_Duty"
+    Case 14:      s = "V_Duty"
+    Case 15:      s = "Clear_Duty"      ' 古いリソースではCL_Duty（16）の代わりに格納されている場合がある．新規作成の場合には使用しない．
+    Case 16:      s = "CL_Duty"
+    Case 17:      s = "LLk_Duty"
+    Case 18:      s = "1_Duty"
+    Case 19:      s = "2_Duty"
+    Case 20:      s = "Total_Duty"
+    Case 21:      s = "Or_Duty"
+    Case 22:      s = "Lc+Lm_Duty"
+    Case 23:      s = "Gr_Duty"
+    Case 24:      s = "Km_Duty"
+    Case 25:      s = "Kp_Duty"
+    Case 26:      s = "W_Duty"
+    Case 27:      s = "Lb_Duty"
+    Case 28:      s = "Mt_Duty"
+    Case 29:      s = "MLk_duty"
+    Case 30:      s = "RL_duty"
+    
+    Case Else
+        s = "** Unknown Ink duty code **"
+    End Select
+    GetInkDutyCodeName = s
+End Function
+
+
+'
+' インクコード→色名変換
+Private Function GetInkName(InkCode As Byte) As String
+    Dim InkName As String
+    Select Case InkCode
+    Case 0:         InkName = "K"                      ' Black K
+    Case 1:         InkName = "C"                      ' Cyan C
+    Case 2:         InkName = "M"                      ' Magenta M
+    Case 3:         InkName = "Y"                      ' Yellow Y
+    Case 4:         InkName = "Lc"                      ' Light Cyan Lc
+    Case 5:         InkName = "Lm"                      ' Light Magenta Lm
+    Case 6:         InkName = "Dy"                      ' Dark Yellow Dy
+    Case 7:         InkName = "Lk"                      ' Light Black Lk
+    Case 8:         InkName = "R"                      ' Red R
+    Case 9:         InkName = "V"                      ' Violet V
+    Case 10:       InkName = "CL"                      ' Clear CL
+    Case 11:        InkName = "LLk"                     ' Light Light Black LLk
+    Case 12:        InkName = "Km"                     ' Matte Black Km
+    Case 13:        InkName = "Kp"                     ' Photo Black Kp
+    Case 14:        InkName = "Or"                     ' Orange Or
+    Case 15:        InkName = "Gr"                     ' Green Gr
+    Case 16:        InkName = "W"                     ' White W
+    Case 17:        InkName = "Lb"                     ' Light Blue Lb
+    Case 18:        InkName = "-"                     ' Reserved -
+    Case 19:        InkName = "Mt"                     ' Metal Mt
+    Case 20:        InkName = "W2"                     ' White2 W2
+    Case 21:        InkName = "MLk"                     ' Middle Light Black MLk
+    Case 22:        InkName = "RL"                     ' Reactive Liquid RL
+        
+    Case 128:       InkName = "WK"                    ' White Black WK 白色調
+    Case 129:       InkName = "WC"                    ' White Cyan WC
+    Case 130:       InkName = "WM"                    ' White Magenta WM
+    Case 131:       InkName = "WY"                    ' White Yellow WY
+    Case 132:       InkName = "WLc"                    ' White Light Cyan WLc
+    Case 133:       InkName = "WLm"                    ' White Light Magenta WLm
+    Case 135:       InkName = "WLk"                    ' White Light Black WLk
+    Case 142:       InkName = "WOr"                    ' White Orange WOr
+    Case 143:       InkName = "WGr"                    ' White Green WGr
+    Case 144:       InkName = "WW"                    ' White White WW
+    Case 147:       InkName = "Wmt"                    ' White Metal WMt
+    
+    Case 254:       InkName = "Other inks"                        ' Other inks ダミーのインク色
+    Case 255:       InkName = "Not use"                        ' Not use ダミーのインク色
+        
+    Case Else
+        InkName = "** Unknown Ink code **"
+    End Select
+    GetInkName = InkName
+ 
+End Function
+
+
+
+'
+' バイト列→文字列変換
+'
+Private Function BytesToString(b() As Byte) As String
+    Dim i As Long
+    BytesToString = ""
+    For i = LBound(b) To UBound(b)
+        BytesToString = BytesToString & Chr(b(i))
+    Next i
+End Function
+
+'
+' データをシート上に表示
+' 項目名、データ
+'              データ部分は単一のデータ / 配列を指定できる
+'
+Private Sub WriteData(Name As String, val, comment As String)
+    If Not IsArray(val) Then
+        ' 単一のデータ
+        WriteDataSingle Name, val, comment
+    Else
+        ' 配列型
+        ' コンパイル時に型不明だと、WriteDataArray の呼び出しでコンパイルエラーになる
+        ' それを回避するため、明示的に配列として宣言した変数に代入してから呼び出す
+        Dim count As Long
+        count = UBound(val) - LBound(val) + 1
+        Dim ValArray()
+        ReDim ValArray(count - 1)
+        Dim i As Long
+        For i = 0 To count - 1
+            ValArray(i) = val(i)
+        Next i
+        WriteDataArray Name, ValArray, comment
+    
+    End If
+End Sub
+
+'
+' データをシート上に表示
+' 項目名、データ（単一の値）
+Private Sub WriteDataSingle(Name As String, val, comment As String)
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataName) = Name
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataKind) = DataKindName(Vartype(val))
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataValueStart) = val
+    If comment <> "" Then
+        Worksheets(g_SheetName).Cells(g_Line, g_X_DataValueStart + 2) = ";" & comment               ' 1つ空けてコメントを書き込む
+    End If
+    g_Line = g_Line + 1
+End Sub
+
+
+'
+' データをシート上に表示
+' 項目名のみ
+Private Sub WriteName(Name As String)
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataName) = Name
+    g_Line = g_Line + 1
+End Sub
+
+
+'
+' データをシート上に表示
+' 項目名、データ配列
+Private Sub WriteDataArray(Name As String, val(), comment As String)
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataName) = Name
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataKind) = DataKindName(Vartype(val(0)))
+    Dim i As Long
+    Dim x As Long
+    x = g_X_DataValueStart
+    For i = LBound(val) To UBound(val)
+        Worksheets(g_SheetName).Cells(g_Line, x) = val(i)
+        x = x + 1
+    Next i
+    If comment <> "" Then
+        Worksheets(g_SheetName).Cells(g_Line, x + 1) = ";" & comment               ' 1つ空けてコメントを書き込む
+    End If
+    g_Line = g_Line + 1
+End Sub
+
+'
+' データ種別
+' VBの変数型から表示文字列に変換する
+Private Function DataKindName(Vartype As VbVarType) As String
+    DataKindName = "** Unknown **"          ' 判定できなかったときに表示する
+    Select Case Vartype
+    Case vbByte
+        DataKindName = c_DataKindBYTE
+    Case vbInteger
+        DataKindName = c_DataKindWORD
+    Case vbLong
+        DataKindName = c_DataKindLONG
+    Case vbString
+        DataKindName = c_DataKindSTRING
+    End Select
+End Function
+'
+' LUTデータをシート上に表示
+' 項目名、データ配列、データ幅
+Private Sub WriteDataLUTB(Name As String, val() As Byte, UnitSize As Long)
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataName) = Name
+    Const DataKind As String = c_DataKindBYTE
+    NewLine
+    
+    Dim count As Long
+    count = UBound(val) - LBound(val) + 1
+    Dim LineCount As Long
+    LineCount = count / UnitSize
+    Dim i As Long
+    Dim x As Long
+    For i = 0 To LineCount - 1
+        Worksheets(g_SheetName).Cells(g_Line, g_X_DataKind) = DataKind
+        For x = 0 To UnitSize - 1
+            Worksheets(g_SheetName).Cells(g_Line, x + g_X_DataValueStart) = val(i * UnitSize + x)
+        Next x
+        NewLine
+    Next i
+End Sub
+
+'
+' LUTデータをシート上に表示
+' 項目名、データ配列、データ幅
+Private Sub WriteDataLUTI(Name As String, val() As Long, UnitSize As Long) '田中(健)　Integer→Long
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataName) = Name
+    Const DataKind As String = c_DataKindWORD
+    NewLine
+    
+    Dim count As Long
+    count = UBound(val) - LBound(val) + 1
+    Dim LineCount As Long
+    LineCount = count / UnitSize
+    Dim i As Long
+    For i = 0 To LineCount - 1
+        Worksheets(g_SheetName).Cells(g_Line, g_X_DataKind) = DataKind
+        Dim x As Long
+        For x = 0 To UnitSize - 1
+            Worksheets(g_SheetName).Cells(g_Line, x + g_X_DataValueStart) = val(i * UnitSize + x) '田中(健)　ここでエクセル上にインク量が出力している
+        Next x
+        NewLine
+    Next i
+    
+
+End Sub
+
+'
+' コメント配列表示
+'          インクコードに対する色名など
+Private Sub WriteComment(Title As String, val() As String)
+    Worksheets(g_SheetName).Cells(g_Line, g_X_DataName) = Title
+    Dim i As Long
+    Dim count As Long
+    count = UBound(val) - LBound(val) + 1
+    For i = 0 To count - 1
+        Worksheets(g_SheetName).Cells(g_Line, i + g_X_DataValueStart) = val(i)
+    Next i
+    NewLine
+End Sub
+
+
+'
+' データ表示箇所を移動（改行）
+Private Sub NewLine()
+    g_Line = g_Line + 1
+End Sub
+
+
+'
+' LUTリソース出力
+'
+Private Function WriteLUTResourceSheet(FilePath As String, SheetName As String)
+
+    Dim FileExist As String
+    Dim errflg As Boolean
+    Dim msg As String
+
+    '自動計算と再描画を停止
+    Application.Calculation = xlCalculationManual
+    Application.ScreenUpdating = False
+    msg = "Error."
+    On Error GoTo error_end
+
+    errflg = False
+
+    ' 出力ファイルの確認
+    FileExist = Dir(FilePath)
+    If Not FileExist = "" Then
+        Kill FilePath                                   ' 既存のファイルがあったら消す
+    End If
+
+    Open FilePath For Binary Access Write As #1     'ファイルのオープン
+
+    ' 出力シート
+    g_SheetName = SheetName
+    g_Line = g_Y_Start
+
+    ' データがある行を順番に出力する
+    ' データがない行が連続して出現したら停止する
+    Dim NoneDataCount As Long
+    NoneDataCount = 0
+    While NoneDataCount < c_Th_NoneDataCount
+        Dim DataName As String
+        Dim DataKind As String
+        DataName = Worksheets(g_SheetName).Cells(g_Line, g_X_DataName)
+        DataKind = Worksheets(g_SheetName).Cells(g_Line, g_X_DataKind)
+        If DataKind <> "" Then
+            WriteLUTResourceLine DataName, DataKind
+            NoneDataCount = 0
+        Else
+            NoneDataCount = NoneDataCount + 1
+        End If
+        g_Line = g_Line + 1
+    Wend
+
+    Close #1    ' ファイルを閉じる
+    WriteLUTResourceSheet = True
+    GoTo normal_end
+
+
+error_end:
+    Close #1    ' ファイルを閉じる
+    MsgBox msg, vbOKOnly, c_strToolName           'エラーメッセージの表示
+    WriteLUTResourceSheet = False                    '読み込み失敗
+
+normal_end:
+    '自動計算と再描画を再開
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+End Function
+
+' 1行分のデータ出力
+' データ種別によって振り分け
+Private Sub WriteLUTResourceLine(DataName As String, DataKind As String)
+    Dim Pos As Long
+    Dim Pos2 As Long
+    Pos = Seek(1)
+    If DataName = c_DataName_Tag Then
+        ' タグの開始位置は4バイト境界に配置する
+        Pos2 = ((Pos - 1 + 3) \ 4) * 4 + 1
+        Seek #1, Pos2
+    End If
+    
+    Select Case DataKind
+    Case c_DataKindBYTE
+        WriteLUTResourceLineMulti 1      ' BYTE
+    Case c_DataKindWORD
+        WriteLUTResourceLineMulti 2     ' WORD
+    Case c_DataKindLONG
+        WriteLUTResourceLineMulti 4      ' LONG
+    Case c_DataKindSTRING
+        WriteLUTResourceLineS       ' STRING
+    Case Else
+        ' 単に無視する
+    End Select
+End Sub
+
+Private Sub test()
+    Dim val As Byte
+    Dim x As Long
+    x = g_X_DataValueStart
+    
+    Dim Data As Long
+    Data = 1275
+    
+    Dim i As Long
+    For i = 0 To 3
+        val = Data And &HFF
+        Debug.Print Hex(val)
+        Data = Data \ 256  '右1byteシフト
+    Next i
+End Sub
+
+
+Private Sub WriteCurrency2Byte(Data As Currency, ByteNum As Long)
+    Dim val As Byte
+
+    Dim i As Long
+    If Data >= 0 Then
+        For i = 0 To ByteNum - 1
+            val = Data And &HFF
+            Put #1, , val
+            Data = Data \ 256  '右1byteシフト
+        Next i
+    Else
+        Data = 256 ^ ByteNum + Data
+        For i = 0 To ByteNum - 1
+            val = Data And &HFF
+            Put #1, , val
+            Data = Data \ 256  '右1byteシフト
+        Next i
+    End If
+    
+End Sub
+
+' Multi対応
+Private Sub WriteLUTResourceLineMulti(ByteNum As Long)
+    Dim x As Long
+    x = g_X_DataValueStart
+    While Worksheets(g_SheetName).Cells(g_Line, x) <> ""
+        WriteCurrency2Byte CCur(Worksheets(g_SheetName).Cells(g_Line, x)), ByteNum
+        x = x + 1
+    Wend
+End Sub
+
+' BYTE型
+Private Sub WriteLUTResourceLineB()
+    Dim x As Long
+    x = g_X_DataValueStart
+    While Worksheets(g_SheetName).Cells(g_Line, x) <> ""
+        WriteCurrency2Byte CCur(Worksheets(g_SheetName).Cells(g_Line, x)), 1
+        x = x + 1
+    Wend
+End Sub
+
+' WORD型
+Private Sub WriteLUTResourceLineW()
+    Dim x As Long
+    x = g_X_DataValueStart
+    While Worksheets(g_SheetName).Cells(g_Line, x) <> ""
+        WriteCurrency2Byte CCur(Worksheets(g_SheetName).Cells(g_Line, x)), 2
+        x = x + 1
+    Wend
+End Sub
+
+' LONG型
+Private Sub WriteLUTResourceLineL()
+    Dim x As Long
+    x = g_X_DataValueStart
+    While Worksheets(g_SheetName).Cells(g_Line, x) <> ""
+        WriteCurrency2Byte CCur(Worksheets(g_SheetName).Cells(g_Line, x)), 4
+        x = x + 1
+    Wend
+End Sub
+
+' STRING型
+Private Sub WriteLUTResourceLineS()
+    Dim val As String
+    val = Worksheets(g_SheetName).Cells(g_Line, g_X_DataValueStart)
+    ' 文字列を1文字ずつByte型に変換して書き込み
+    Dim i As Long
+    For i = 1 To Len(val)
+        Dim c As String
+        Dim b As Byte
+        c = Mid(val, i, 1)
+        b = Asc(c)
+        Put #1, , b
+    Next
+End Sub
+
+
